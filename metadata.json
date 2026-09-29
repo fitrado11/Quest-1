@@ -1,0 +1,6 @@
+{
+  "name": "QUEST Academy",
+  "description": "Educational side-scrolling action RPG teaching Grade 5 students AI literacy and Digital Adab through the QUEST framework.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
