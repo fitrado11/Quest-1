@@ -24,6 +24,9 @@ import { ResultsScreen } from './components/ResultsScreen';
 import { ThesisLogsModal } from './components/ThesisLogsModal';
 import { AchievementsModal } from './components/AchievementsModal';
 import { HelpStoryModal } from './components/HelpStoryModal';
+import { HelpGuideModal } from './components/HelpGuideModal';
+import { OnboardingModal } from './components/OnboardingModal';
+import { StudentProfileModal } from './components/StudentProfileModal';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<GameView>('hub');
@@ -76,6 +79,12 @@ export default function App() {
   const [isThesisLogsOpen, setIsThesisLogsOpen] = useState<boolean>(false);
   const [isAchievementsOpen, setIsAchievementsOpen] = useState<boolean>(false);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(() => {
+    return !localStorage.getItem('quest_onboarding_seen');
+  });
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(() => {
+    return !localStorage.getItem('quest_student_registered');
+  });
 
   // Toggle Mute
   const handleToggleMute = () => {
@@ -173,6 +182,7 @@ export default function App() {
           onOpenStoryModal={() => setIsHelpOpen(true)}
           onChangeGameSpeed={handleChangeGameSpeed}
           onResetData={handleResetData}
+          onOpenProfileModal={() => setIsProfileModalOpen(true)}
         />
       )}
 
@@ -231,9 +241,24 @@ export default function App() {
         badges={getPlayerBadgeItems(playerStats.badges)}
       />
 
-      <HelpStoryModal
+      <HelpGuideModal
         isOpen={isHelpOpen}
         onClose={() => setIsHelpOpen(false)}
+      />
+
+      <OnboardingModal
+        isOpen={isOnboardingOpen && !isProfileModalOpen}
+        onClose={() => setIsOnboardingOpen(false)}
+      />
+
+      <StudentProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        playerStats={playerStats}
+        onSaveProfile={(updated) => {
+          setPlayerStats(updated);
+        }}
+        isInitialRegistration={!localStorage.getItem('quest_student_registered')}
       />
     </div>
   );

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { MissionDefinition } from '../types';
 import { audio } from '../utils/audio';
+import { shuffleArray } from '../utils/shuffle';
 import { saveUnlockedPuzzleId } from '../utils/storage';
 
 interface UnlockPuzzleModalProps {
@@ -33,6 +34,7 @@ export const UnlockPuzzleModal: React.FC<UnlockPuzzleModalProps> = ({
   const [attempts, setAttempts] = useState<number>(0);
   const [showHint, setShowHint] = useState<boolean>(false);
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
+  const [shuffledOptions] = useState(() => shuffleArray(mission.unlockPuzzle.options));
 
   if (!isOpen) return null;
 
@@ -140,7 +142,7 @@ export const UnlockPuzzleModal: React.FC<UnlockPuzzleModalProps> = ({
           </div>
 
           <div className="space-y-2">
-            {puzzle.options.map(opt => {
+            {shuffledOptions.map((opt, idx) => {
               const isSelected = selectedOptionId === opt.id;
               let styleClass = 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-emerald-500/60 hover:bg-slate-800';
 
@@ -160,7 +162,7 @@ export const UnlockPuzzleModal: React.FC<UnlockPuzzleModalProps> = ({
                   className={`w-full p-3 rounded-2xl border text-left text-xs sm:text-sm font-semibold transition flex items-start gap-2.5 cursor-pointer ${styleClass}`}
                 >
                   <span className="w-6 h-6 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 mt-0.5">
-                    {opt.id.replace('opt_', '').toUpperCase()}
+                    {String.fromCharCode(65 + idx)}
                   </span>
                   <span className="flex-1 leading-snug">{opt.text}</span>
                   {isSelected && opt.isCorrect && (

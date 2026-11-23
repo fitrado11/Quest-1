@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { CombatData, DigitalAdabScores, MissionDefinition, QUESTScores, WeaponLoadout, XPEarned } from '../types';
 import { audio } from '../utils/audio';
+import { getPlayerStats } from '../utils/storage';
+import { CertificateModal } from './CertificateModal';
 
 interface ResultsScreenProps {
   mission: MissionDefinition;
@@ -48,6 +50,8 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   onReturnToHub,
   onViewThesisLogs,
 }) => {
+  const [isCertificateOpen, setIsCertificateOpen] = React.useState<boolean>(false);
+  const playerStats = React.useMemo(() => getPlayerStats(), []);
   return (
     <div id="post-mission-results-screen" className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none py-8 px-4">
       <div className="max-w-4xl mx-auto w-full space-y-6">
@@ -102,6 +106,35 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
               {isNewBest ? '⭐ Rekor Terbaik!' : 'Top Penjaga'}
             </div>
           </div>
+        </div>
+
+        {/* GOLDEN CERTIFICATE HERO BANNER */}
+        <div className="bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 border-2 border-amber-500/80 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4 text-center sm:text-left">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 via-yellow-400 to-amber-600 p-0.5 shadow-xl shrink-0 flex items-center justify-center">
+              <Award className="w-8 h-8 text-slate-950" />
+            </div>
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-mono font-bold uppercase border border-amber-500/30">
+                <Sparkles className="w-3 h-3 text-amber-400" />
+                Sertifikat Kelulusan Misi Siap Diunduh
+              </div>
+              <h3 className="text-lg sm:text-xl font-black text-white font-cyrillic">
+                Sertifikat Penghargaan Kompetensi Misi
+              </h3>
+              <p className="text-xs text-slate-300">
+                Tercetak untuk: <strong>{playerStats.name}</strong> • <strong>{playerStats.grade}</strong> (SD Lazuardi GCS)
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => { audio.playClick(); setIsCertificateOpen(true); }}
+            className="w-full sm:w-auto py-3.5 px-6 rounded-2xl bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-950/60 transition transform hover:scale-[1.02] cursor-pointer shrink-0"
+          >
+            <Award className="w-4 h-4 text-slate-950" />
+            <span>UNDUH SERTIFIKAT (PNG/PDF)</span>
+          </button>
         </div>
 
         {/* ROW: Digital Adab Pillars Scores */}
@@ -232,6 +265,18 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
           )}
         </div>
       </div>
+
+      {/* CERTIFICATE MODAL */}
+      <CertificateModal
+        isOpen={isCertificateOpen}
+        onClose={() => setIsCertificateOpen(false)}
+        studentName={playerStats.name}
+        studentGrade={playerStats.grade}
+        mission={mission}
+        combatData={combatData}
+        questScores={questScores}
+        xpEarned={xpEarned}
+      />
     </div>
   );
 };

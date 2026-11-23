@@ -84,6 +84,42 @@ export const HelpStoryModal: React.FC<HelpStoryModalProps> = ({ isOpen, onClose 
             </div>
           </div>
 
+          {/* Sprite Character Gallery */}
+          <div className="space-y-2">
+            <h3 className="font-bold text-white text-sm flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              Daftar Karakter & Entitas RPG 2D
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col items-center gap-1.5">
+                <img src="/sprites/mc_right.png" alt="Karakter Utama" className="h-12 object-contain" />
+                <span className="font-bold text-emerald-300">Guardian Siswa</span>
+                <span className="text-[10px] text-slate-400">MC Kanan & Kiri</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col items-center gap-1.5">
+                <div className="flex items-center justify-center gap-2 h-12">
+                  <img src="/sprites/jump.png" alt="Lompat" className="h-10 object-contain" />
+                  <img src="/sprites/jump_twice.png" alt="Lompat 2x" className="h-12 object-contain" />
+                </div>
+                <span className="font-bold text-teal-300">Lompatan Adab</span>
+                <span className="text-[10px] text-slate-400">Single & Double Jump</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col items-center gap-1.5">
+                <div className="flex items-center justify-center gap-1.5 h-12">
+                  <img src="/sprites/enemy_left.png" alt="Musuh Glitch" className="h-11 object-contain" />
+                  <img src="/sprites/enemy_right.png" alt="Musuh Glitch" className="h-11 object-contain" />
+                </div>
+                <span className="font-bold text-rose-300">Drone & Bot Hoaks</span>
+                <span className="text-[10px] text-slate-400">Patroli Kiri & Kanan</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col items-center gap-1.5">
+                <img src="/sprites/final_boss.png" alt="Final Boss" className="h-12 object-contain" />
+                <span className="font-bold text-purple-300">Final Mega Boss</span>
+                <span className="text-[10px] text-slate-400">Distorsi Konteks AI</span>
+              </div>
+            </div>
+          </div>
+
           {/* S2 Thesis Note */}
           <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-700/50 text-emerald-200 text-xs flex items-center gap-2">
             <Shield className="w-4 h-4 text-emerald-400 shrink-0" />

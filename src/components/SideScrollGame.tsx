@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { CombatData, InGamePuzzle, MissionDefinition, QUESTScores, WeaponLoadout } from '../types';
 import { audio } from '../utils/audio';
+import { shuffleArray } from '../utils/shuffle';
+import { getGameSprites, GameSprites } from '../utils/gameSprites';
 
 interface SideScrollGameProps {
   mission: MissionDefinition;
@@ -55,6 +57,15 @@ interface Particle {
   size: number;
 }
 
+interface HitEffect {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  size: number;
+  angle: number;
+}
+
 interface Platform {
   x: number;
   y: number;
@@ -85,6 +96,7 @@ interface PatrolEnemy {
   color: string;
   emoji: string;
   isAlive: boolean;
+  isChasing?: boolean;
 }
 
 export type GameOverReason = 'fell' | 'hp_zero' | 'out_of_ammo';
@@ -104,52 +116,52 @@ export interface InGameWeaponUpgrade {
 
 export const WEAPON_UPGRADES: InGameWeaponUpgrade[] = [
   {
+    id: 'homing',
+    name: 'Kristal Homing Data (Auto-Seeker)',
+    badge: 'HOMING MISSILE',
+    icon: '🌟',
+    description: 'Peluru pintar otomatis berbelok mengejar posisi musuh / boss terdekat sampai tepat sasaran!',
+    ammoBonus: 45,
+    hpRestore: 30,
+    damageMultiplier: 1.25,
+    bulletColor: '#10b981',
+    bulletLabel: 'SEEKER',
+  },
+  {
+    id: 'spread',
+    name: 'Meriam Tabayyun Sebar (Tri-Spread Burst)',
+    badge: '3 MISSILE SEBAR',
+    icon: '💥',
+    description: 'Menembakkan 3 peluru sekaligus menyebar luas. Jika digabung dengan Homing, ketiganya akan melacak target!',
+    ammoBonus: 50,
+    hpRestore: 25,
+    damageMultiplier: 1.15,
+    bulletColor: '#c084fc',
+    bulletLabel: 'SEBAR-3',
+  },
+  {
     id: 'rapid',
     name: 'Laser Verifikasi Kilat (Rapid Precision Beam)',
     badge: 'TEMBAKAN KILAT',
     icon: '⚡',
-    description: 'Tembakan laser super cepat beruntun tanpa jeda, laju proyektil +50%, menembus pertahanan musuh seketika!',
-    ammoBonus: 25,
+    description: 'Tembakan super cepat beruntun tanpa jeda (cooldown berkurang jadi 110ms) dan kecepatan peluru meningkat pesat!',
+    ammoBonus: 55,
     hpRestore: 25,
     damageMultiplier: 1.3,
     bulletColor: '#06b6d4',
     bulletLabel: 'KILAT',
   },
   {
-    id: 'spread',
-    name: 'Meriam Tabayyun Sebar (Tri-Spread Burst)',
-    badge: '3 ARAH SEBAR',
-    icon: '💥',
-    description: 'Menembakkan 3 proyektil sekaligus menyebar luas, sangat efektif melumpuhkan kelompok hoaks & proyektil lawan!',
-    ammoBonus: 22,
-    hpRestore: 25,
-    damageMultiplier: 1.0,
-    bulletColor: '#c084fc',
-    bulletLabel: 'SEBAR',
-  },
-  {
     id: 'heavy',
     name: 'Buster Integritas Raksasa (Heavy Buster)',
-    badge: 'PENEMBUS AREA',
+    badge: 'BUSTER PENEMBUS',
     icon: '🛡️',
-    description: 'Meriam plasma raksasa berdaya hancur tinggi yang menembus banyak musuh sekaligus dan memulihkan HP!',
-    ammoBonus: 18,
+    description: 'Peluru plasma raksasa berdaya hancur tinggi yang menembus banyak musuh sekaligus (piercing)!',
+    ammoBonus: 40,
     hpRestore: 45,
-    damageMultiplier: 2.2,
+    damageMultiplier: 1.8,
     bulletColor: '#f59e0b',
     bulletLabel: 'BUSTER',
-  },
-  {
-    id: 'homing',
-    name: 'Kristal Homing Data (Auto-Seeker)',
-    badge: 'PELACAK OTOMATIS',
-    icon: '🌟',
-    description: 'Peluru pintar berteknologi pelacak yang otomatis membelok mengejar posisi musuh atau boss di mana pun berada!',
-    ammoBonus: 20,
-    hpRestore: 30,
-    damageMultiplier: 1.25,
-    bulletColor: '#10b981',
-    bulletLabel: 'SEEKER',
   },
 ];
 
@@ -168,14 +180,16 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
 
   // Initial stats
   const initialMaxHp = 100 + weaponLoadout.bonusHealth;
+  // Final boss HP dibuat 5x lipat lebih panjang dari sebelumnya (minimal 3.900 HP, hingga 7.280 HP)
+  const calculatedBossMaxHp = Math.max(3900, Math.round(mission.boss.maxHp * 13));
   const [playerHp, setPlayerHp] = useState<number>(initialMaxHp);
-  const [bossHp, setBossHp] = useState<number>(mission.boss.maxHp);
+  const [bossHp, setBossHp] = useState<number>(calculatedBossMaxHp);
   const [ammo, setAmmo] = useState<number>(weaponLoadout.maxAmmo);
   const [solvedPuzzleIds, setSolvedPuzzleIds] = useState<string[]>([]);
   const [activePuzzle, setActivePuzzle] = useState<InGamePuzzle | null>(null);
 
-  // In-Game Weapon Upgrades picked during play
-  const [equippedUpgrade, setEquippedUpgrade] = useState<InGameWeaponUpgrade | null>(null);
+  // In-Game Weapon Upgrades: FITUR DIKOMBINASIKAN (tidak menggantikan yang lama)
+  const [equippedUpgrades, setEquippedUpgrades] = useState<InGameWeaponUpgrade[]>([]);
   const [weaponRewardModal, setWeaponRewardModal] = useState<boolean>(false);
   const [rewardNotice, setRewardNotice] = useState<string | null>(null);
 
@@ -206,12 +220,15 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     state.player.isGrounded = false;
     state.player.invulnerableFrames = 0;
     state.player.jumpsRemaining = weaponLoadout.hasDoubleJump ? 2 : 1;
+    state.player.jumpCount = 0;
     state.ammo = weaponLoadout.maxAmmo;
     state.checkpointX = 80;
     state.cameraX = 0;
     state.projectiles = [];
     state.particles = [];
-    state.boss.hp = mission.boss.maxHp;
+    state.hitEffects = [];
+    state.boss.hp = calculatedBossMaxHp;
+    state.boss.maxHp = calculatedBossMaxHp;
     state.boss.phase = 1;
     state.boss.spawnTimer = 0;
     state.boss.x = 6600;
@@ -221,13 +238,14 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     state.projectilesFired = 0;
     state.projectilesDodged = 0;
 
-    // Reset 10 patrol enemies
+    // Reset 10 patrol enemies (and clear chasing status)
     state.enemies.forEach((enemy, idx) => {
       enemy.isAlive = true;
       enemy.hp = enemy.maxHp;
       enemy.x = enemy.minX + 30;
       enemy.facing = 'left';
       enemy.shootCooldown = idx * 25;
+      enemy.isChasing = false;
     });
 
     // Reset puzzles
@@ -237,11 +255,12 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     state.bridgeRaised = false;
 
     setPlayerHp(initialMaxHp);
-    setBossHp(mission.boss.maxHp);
+    setBossHp(calculatedBossMaxHp);
     setAmmo(weaponLoadout.maxAmmo);
     setSolvedPuzzleIds([]);
     setGameOverReason(null);
-    setEquippedUpgrade(null);
+    setEquippedUpgrades([]);
+    state.equippedUpgradesRef = [];
   };
 
   // Re-space in-game puzzles across the 7200px stage
@@ -263,14 +282,16 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
       y: 350,
       vx: 0,
       vy: 0,
-      width: 28,
-      height: 42,
+      width: 30,
+      height: 44,
       isGrounded: false,
       jumpsRemaining: weaponLoadout.hasDoubleJump ? 2 : 1,
+      jumpCount: 0, // 0 = ground, 1 = single jump, 2 = double jump
       health: initialMaxHp,
       maxHealth: initialMaxHp,
       facing: 'right' as 'right' | 'left',
       invulnerableFrames: 0,
+      lastShootTime: 0,
     },
     ammo: weaponLoadout.maxAmmo,
     maxAmmo: weaponLoadout.maxAmmo,
@@ -280,10 +301,10 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
       y: 260,
       vx: 0,
       vy: 1.5,
-      width: 72,
-      height: 72,
-      hp: mission.boss.maxHp,
-      maxHp: mission.boss.maxHp,
+      width: 88,
+      height: 88,
+      hp: calculatedBossMaxHp,
+      maxHp: calculatedBossMaxHp,
       phase: 1,
       spawnTimer: 0,
       glitchOffset: 0,
@@ -488,6 +509,7 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     ] as PatrolEnemy[],
     projectiles: [] as Projectile[],
     particles: [] as Particle[],
+    hitEffects: [] as HitEffect[],
     keys: {
       left: false,
       right: false,
@@ -507,13 +529,13 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     startTime: Date.now(),
     bridgeRaised: false,
     laserFlickerTimer: 0,
-    equippedUpgradeRef: null as InGameWeaponUpgrade | null,
+    equippedUpgradesRef: [] as InGameWeaponUpgrade[],
   });
 
   // Keep ref synchronized
   useEffect(() => {
-    gameStateRef.current.equippedUpgradeRef = equippedUpgrade;
-  }, [equippedUpgrade]);
+    gameStateRef.current.equippedUpgradesRef = equippedUpgrades;
+  }, [equippedUpgrades]);
 
   // Touch controls state
   const touchStateRef = useRef({
@@ -521,10 +543,13 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     right: false,
   });
 
-  // Open active puzzle handler
+  // Open active puzzle handler (with shuffled options)
   const handleOpenPuzzle = (puzzle: InGamePuzzle) => {
     audio.playClick();
-    setActivePuzzle(puzzle);
+    setActivePuzzle({
+      ...puzzle,
+      options: shuffleArray(puzzle.options || []),
+    });
   };
 
   // Solve puzzle from modal
@@ -559,16 +584,21 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     }
   };
 
-  // Weapon Upgrade Selection Handler
+  // Weapon Upgrade Selection Handler (FITUR DIKOMBINASIKAN)
   const handleSelectWeaponUpgrade = (upgrade: InGameWeaponUpgrade) => {
     audio.playPowerUp();
-    setEquippedUpgrade(upgrade);
 
     const state = gameStateRef.current;
-    state.equippedUpgradeRef = upgrade;
+    const exists = state.equippedUpgradesRef.some(u => u.id === upgrade.id);
+    let nextUpgrades = [...state.equippedUpgradesRef];
+    if (!exists) {
+      nextUpgrades.push(upgrade);
+    }
+    state.equippedUpgradesRef = nextUpgrades;
+    setEquippedUpgrades(nextUpgrades);
 
-    // Refill ammo & add bonus
-    state.ammo = Math.min(weaponLoadout.maxAmmo + 40, state.ammo + upgrade.ammoBonus);
+    // Refill ammo & add bonus (mendukung pertarungan boss 5x HP)
+    state.ammo = Math.min(weaponLoadout.maxAmmo + 180, state.ammo + upgrade.ammoBonus);
     setAmmo(state.ammo);
 
     // Restore player HP
@@ -576,11 +606,17 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     setPlayerHp(state.player.health);
 
     setWeaponRewardModal(false);
-    setRewardNotice(`⚡ Senjata Ditingkatkan: ${upgrade.name}! (+${upgrade.ammoBonus} Peluru & +${upgrade.hpRestore} HP)`);
+
+    const comboBadges = nextUpgrades.map(u => u.badge).join(' + ');
+    if (nextUpgrades.length > 1) {
+      setRewardNotice(`🔥 KOMBINASI SENJATA TERBENTUK: [${comboBadges}] (+${upgrade.ammoBonus} Peluru & +${upgrade.hpRestore} HP)`);
+    } else {
+      setRewardNotice(`⚡ FITUR AKTIF: [${upgrade.name}] (+${upgrade.ammoBonus} Peluru & +${upgrade.hpRestore} HP)`);
+    }
 
     setTimeout(() => {
       setRewardNotice(null);
-    }, 4000);
+    }, 4500);
   };
 
   // Setup Keyboard Listeners
@@ -632,6 +668,7 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
       state.player.vy = -10.5;
       state.player.isGrounded = false;
       state.player.jumpsRemaining -= 1;
+      state.player.jumpCount = state.player.jumpCount === 0 ? 1 : 2;
 
       // Dust particles
       for (let i = 0; i < 5; i++) {
@@ -653,12 +690,18 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     const state = gameStateRef.current;
     if (state.isGameOver || state.isVictory) return;
 
-    const currentUpgrade = state.equippedUpgradeRef;
-    const attackCooldown = currentUpgrade?.id === 'rapid' ? 120 : 220;
+    const upgrades = state.equippedUpgradesRef || [];
+    const hasRapid = upgrades.some(u => u.id === 'rapid');
+    const hasSpread = upgrades.some(u => u.id === 'spread');
+    const hasHeavy = upgrades.some(u => u.id === 'heavy');
+    const hasHoming = upgrades.some(u => u.id === 'homing');
+
+    const attackCooldown = hasRapid ? 110 : 220;
 
     const now = Date.now();
     if (now - state.lastAttackTime < attackCooldown) return;
     state.lastAttackTime = now;
+    state.player.lastShootTime = now;
 
     // Check Ammo Limit
     if (state.ammo <= 0) {
@@ -682,107 +725,102 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
 
     const dir = state.player.facing === 'right' ? 1 : -1;
     const accuracyBonus = Math.round((questScores.total / 120) * 12);
-    let finalDamage = Math.round((weaponLoadout.baseDamage * weaponLoadout.damageMultiplier) + accuracyBonus);
+    let baseFinalDamage = Math.round((weaponLoadout.baseDamage * weaponLoadout.damageMultiplier) + accuracyBonus);
 
-    if (currentUpgrade) {
-      finalDamage = Math.round(finalDamage * currentUpgrade.damageMultiplier);
-    }
+    // Multipliers combine
+    let combinedMultiplier = 1;
+    upgrades.forEach(u => {
+      combinedMultiplier *= u.damageMultiplier;
+    });
+    let finalDamage = Math.round(baseFinalDamage * Math.min(3.5, combinedMultiplier));
 
     const startX = state.player.x + (dir === 1 ? state.player.width + 4 : -12);
     const startY = state.player.y + 14;
 
-    // 1. SPREAD WEAPON UPGRADE (Fires 3 projectiles simultaneously in spread cone)
-    if (currentUpgrade?.id === 'spread') {
-      // Center
+    const baseSpeed = (hasRapid ? 13.5 : 9.5) * gameSpeed;
+    const radius = hasHeavy ? 12 : hasRapid ? 8 : 7;
+    const piercing = hasHeavy;
+    const homing = hasHoming;
+
+    // Combined color & badge label
+    let bulletColor = '#38bdf8';
+    let bulletLabel = 'VERIF';
+    if (hasHoming && hasSpread && hasHeavy) {
+      bulletColor = '#c084fc';
+      bulletLabel = 'HOMING-3-BUSTER';
+    } else if (hasHoming && hasSpread) {
+      bulletColor = '#2dd4bf';
+      bulletLabel = 'HOMING-3';
+    } else if (hasHoming) {
+      bulletColor = '#10b981';
+      bulletLabel = 'SEEKER';
+    } else if (hasSpread) {
+      bulletColor = '#c084fc';
+      bulletLabel = 'SEBAR-3';
+    } else if (hasHeavy) {
+      bulletColor = '#f59e0b';
+      bulletLabel = 'BUSTER';
+    } else if (hasRapid) {
+      bulletColor = '#06b6d4';
+      bulletLabel = 'KILAT';
+    }
+
+    // If Spread is active (or combined with Homing / Buster / Rapid)
+    if (hasSpread) {
+      // Center Projectile
       state.projectiles.push({
         x: startX,
         y: startY,
-        vx: dir * 10 * gameSpeed,
+        vx: dir * baseSpeed,
         vy: 0,
-        radius: 7,
-        color: '#c084fc',
+        radius: radius,
+        color: bulletColor,
         isPlayer: true,
-        damage: Math.round(finalDamage * 0.9),
-        text: 'SEBAR',
+        damage: Math.round(finalDamage * 0.95),
+        piercing: piercing,
+        homing: homing,
+        text: bulletLabel,
       });
-      // Angled Up
+      // Angled Up Projectile
       state.projectiles.push({
         x: startX,
         y: startY,
-        vx: dir * 9.5 * gameSpeed,
+        vx: dir * (baseSpeed * 0.95),
         vy: -2.8,
-        radius: 6,
-        color: '#e879f9',
+        radius: Math.max(5, radius - 1),
+        color: hasHoming ? '#10b981' : '#e879f9',
         isPlayer: true,
-        damage: Math.round(finalDamage * 0.75),
+        damage: Math.round(finalDamage * 0.8),
+        piercing: piercing,
+        homing: homing,
       });
-      // Angled Down
+      // Angled Down Projectile
       state.projectiles.push({
         x: startX,
         y: startY,
-        vx: dir * 9.5 * gameSpeed,
+        vx: dir * (baseSpeed * 0.95),
         vy: 2.8,
-        radius: 6,
-        color: '#e879f9',
+        radius: Math.max(5, radius - 1),
+        color: hasHoming ? '#10b981' : '#e879f9',
         isPlayer: true,
-        damage: Math.round(finalDamage * 0.75),
+        damage: Math.round(finalDamage * 0.8),
+        piercing: piercing,
+        homing: homing,
       });
-    }
-    // 2. RAPID WEAPON UPGRADE (Fast straight high-speed laser beam)
-    else if (currentUpgrade?.id === 'rapid') {
+    } else {
+      // Single Projectile with all accumulated features
       state.projectiles.push({
         x: startX,
         y: startY,
-        vx: dir * 14 * gameSpeed,
+        vx: dir * baseSpeed,
         vy: 0,
-        radius: 8,
-        color: '#06b6d4',
+        radius: radius,
+        color: bulletColor,
         isPlayer: true,
         damage: finalDamage,
-        text: 'KILAT',
-      });
-    }
-    // 3. HEAVY BUSTER WEAPON UPGRADE (Massive piercing plasma blast)
-    else if (currentUpgrade?.id === 'heavy') {
-      state.projectiles.push({
-        x: startX,
-        y: startY,
-        vx: dir * 8 * gameSpeed,
-        vy: 0,
-        radius: 14,
-        color: '#f59e0b',
-        isPlayer: true,
-        damage: finalDamage,
-        piercing: true,
-        text: 'BUSTER',
-      });
-    }
-    // 4. HOMING WEAPON UPGRADE (Smart seeking projectile)
-    else if (currentUpgrade?.id === 'homing') {
-      state.projectiles.push({
-        x: startX,
-        y: startY,
-        vx: dir * 8 * gameSpeed,
-        vy: 0,
-        radius: 7,
-        color: '#10b981',
-        isPlayer: true,
-        damage: finalDamage,
-        homing: true,
-        text: 'SEEKER',
-      });
-    }
-    // STANDARD / DEFAULT
-    else {
-      state.projectiles.push({
-        x: startX,
-        y: startY,
-        vx: dir * 9.5 * gameSpeed,
-        vy: 0,
-        radius: weaponLoadout.tier === 'master' ? 8 : 6,
-        color: weaponLoadout.tier === 'master' ? '#38bdf8' : weaponLoadout.tier === 'enhanced' ? '#34d399' : '#fbbf24',
-        isPlayer: true,
-        damage: finalDamage,
+        piercing: piercing,
+        homing: homing,
+        text: bulletLabel,
       });
     }
   };
@@ -987,6 +1025,7 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
           player.vy = 0;
           player.isGrounded = true;
           player.jumpsRemaining = weaponLoadout.hasDoubleJump ? 2 : 1;
+          player.jumpCount = 0;
         }
       });
 
@@ -1060,29 +1099,42 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
         setGameOverReason('hp_zero');
       }
 
-      // UPDATE PATROL MINIONS (Moving & Directional Shooting Enemies)
+      // UPDATE PATROL MINIONS (Moving, Chasing & Directional Shooting Enemies)
       state.enemies.forEach(enemy => {
         if (!enemy.isAlive) return;
 
-        // Patrol back and forth
-        enemy.x += enemy.vx * gameSpeed;
-        if (enemy.x > enemy.maxX) {
-          enemy.x = enemy.maxX;
-          enemy.vx = -Math.abs(enemy.vx);
-          enemy.facing = 'left';
-        } else if (enemy.x < enemy.minX) {
-          enemy.x = enemy.minX;
-          enemy.vx = Math.abs(enemy.vx);
-          enemy.facing = 'right';
+        // Musuh yang di-skip (pemain melewatinya / melompatinya) akan mengejar karakter utama
+        if (player.x > enemy.x + 35 || enemy.isChasing) {
+          enemy.isChasing = true;
+        }
+
+        if (enemy.isChasing) {
+          // Mode Pengejaran Terus-Menerus sampai kena tembak & kalah!
+          const chaseDir = player.x > enemy.x ? 1 : -1;
+          enemy.facing = chaseDir === 1 ? 'right' : 'left';
+          enemy.x += chaseDir * 2.6 * gameSpeed;
+        } else {
+          // Patroli bolak-balik normal
+          enemy.x += enemy.vx * gameSpeed;
+          if (enemy.x > enemy.maxX) {
+            enemy.x = enemy.maxX;
+            enemy.vx = -Math.abs(enemy.vx);
+            enemy.facing = 'left';
+          } else if (enemy.x < enemy.minX) {
+            enemy.x = enemy.minX;
+            enemy.vx = Math.abs(enemy.vx);
+            enemy.facing = 'right';
+          }
         }
 
         // Shooting behavior towards player
         const distToPlayer = Math.abs(player.x - enemy.x);
-        if (distToPlayer < 420 && Math.abs(player.y - enemy.y) < 160) {
+        if (distToPlayer < 480 && Math.abs(player.y - enemy.y) < 200) {
+          enemy.facing = player.x > enemy.x ? 'right' : 'left';
           enemy.shootCooldown += 1;
           if (enemy.shootCooldown >= enemy.shootInterval) {
             enemy.shootCooldown = 0;
-            const shootDir = player.x > enemy.x ? 1 : -1;
+            const shootDir = enemy.facing === 'right' ? 1 : -1;
             const angleToPlayer = Math.atan2((player.y + 16) - (enemy.y + 16), player.x - enemy.x);
 
             state.projectiles.push({
@@ -1099,6 +1151,16 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
           }
         }
       });
+
+      // ========================================================
+      // GERBANG INTEGRITAS (x = 5950): SEMUA LAWAN HARUS DIKALAHKAN
+      // Pemain tidak bisa masuk ke Arena Final Boss jika masih ada musuh lintasan yang hidup!
+      // ========================================================
+      const aliveRoadMinions = state.enemies.slice(0, 8).filter(e => e.isAlive).length;
+      if (aliveRoadMinions > 0 && player.x > 5950) {
+        player.x = 5950;
+        player.vx = 0;
+      }
 
       // ========================================================
       // UPDATE BOSS AI & OMNIDIRECTIONAL MULTI-ANGLE SHOOTING
@@ -1133,7 +1195,7 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
           audio.playLaser();
           const pSpeed = (boss.phase === 3 ? 6.8 : boss.phase === 2 ? 5.8 : 4.8) * gameSpeed;
 
-          // PHASE 1: DIRECT TARGETED AIM IN ANY DIRECTION
+          // PHASE 1: DIRECT TARGETED AIM IN ANY DIRECTION (3x lipat damage pasukan kecil: 30-36 dmg)
           state.projectiles.push({
             x: bossCenterX,
             y: bossCenterY,
@@ -1142,21 +1204,21 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             radius: 8,
             color: '#f43f5e',
             isPlayer: false,
-            damage: boss.phase === 3 ? 20 : 14,
-            text: 'HALUSINASI',
+            damage: boss.phase === 3 ? 36 : 30,
+            text: 'HALUSINASI 3X',
           });
 
-          // PHASE 2: TRI-SPREAD CONE TOWARDS PLAYER
+          // PHASE 2: TRI-SPREAD CONE TOWARDS PLAYER (3x lipat damage: 30 dmg)
           if (boss.phase >= 2) {
             state.projectiles.push({
               x: bossCenterX,
               y: bossCenterY,
               vx: Math.cos(targetAngle - 0.28) * pSpeed,
               vy: Math.sin(targetAngle - 0.28) * pSpeed,
-              radius: 6,
+              radius: 7,
               color: '#a855f7',
               isPlayer: false,
-              damage: 12,
+              damage: 30,
               text: 'DATA PALSU',
             });
             state.projectiles.push({
@@ -1164,15 +1226,15 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
               y: bossCenterY,
               vx: Math.cos(targetAngle + 0.28) * pSpeed,
               vy: Math.sin(targetAngle + 0.28) * pSpeed,
-              radius: 6,
+              radius: 7,
               color: '#a855f7',
               isPlayer: false,
-              damage: 12,
+              damage: 30,
               text: 'DATA PALSU',
             });
           }
 
-          // PHASE 2 & 3: 360-DEGREE RADIAL NOVA BURST (Menembak ke semua arah memutar)
+          // PHASE 2 & 3: 360-DEGREE RADIAL NOVA BURST (3x lipat damage: 30-32 dmg)
           const radialCycle = boss.phase === 3 ? 100 : 160;
           if (boss.spawnTimer % radialCycle === 0) {
             audio.playBossHit();
@@ -1184,11 +1246,11 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
                 y: bossCenterY,
                 vx: Math.cos(burstAngle) * (pSpeed * 0.8),
                 vy: Math.sin(burstAngle) * (pSpeed * 0.8),
-                radius: 6,
+                radius: 7,
                 color: '#ec4899',
                 isPlayer: false,
-                damage: 10,
-                text: 'BURST',
+                damage: boss.phase === 3 ? 32 : 30,
+                text: 'BURST 3X',
               });
             }
           }
@@ -1244,6 +1306,16 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             setBossHp(boss.hp);
             state.hitsLanded += 1;
 
+            // Spawn hitting object impact graphic
+            state.hitEffects.push({
+              x: proj.x,
+              y: proj.y,
+              life: 0,
+              maxLife: 15,
+              size: 46,
+              angle: Math.random() * Math.PI * 2,
+            });
+
             for (let k = 0; k < 6; k++) {
               state.particles.push({
                 x: proj.x,
@@ -1262,41 +1334,50 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             }
 
             // Boss Defeat
-            if (boss.hp <= 0 && !state.isVictory) {
-              state.isVictory = true;
-              audio.playBossDefeat();
+            if (boss.hp <= 0) {
+              boss.hp = 0;
+              const allEnemiesDefeated = state.enemies.every(e => !e.isAlive);
 
-              for (let k = 0; k < 55; k++) {
-                state.particles.push({
-                  x: boss.x + 35,
-                  y: boss.y + 35,
-                  vx: (Math.random() - 0.5) * 16,
-                  vy: (Math.random() - 0.5) * 16,
-                  life: 0,
-                  maxLife: 55,
-                  color: ['#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#fbbf24'][Math.floor(Math.random() * 5)],
-                  size: 5.5,
-                });
+              if (allEnemiesDefeated && !state.isVictory) {
+                state.isVictory = true;
+                audio.playBossDefeat();
+
+                for (let k = 0; k < 55; k++) {
+                  state.particles.push({
+                    x: boss.x + 35,
+                    y: boss.y + 35,
+                    vx: (Math.random() - 0.5) * 16,
+                    vy: (Math.random() - 0.5) * 16,
+                    life: 0,
+                    maxLife: 55,
+                    color: ['#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#fbbf24'][Math.floor(Math.random() * 5)],
+                    size: 5.5,
+                  });
+                }
+
+                setTimeout(() => {
+                  const totalSeconds = Math.round((Date.now() - state.startTime) / 1000);
+                  const accuracy = state.projectilesFired > 0 
+                    ? Math.round((state.hitsLanded / state.projectilesFired) * 100) 
+                    : 88;
+
+                  onMissionComplete(
+                    {
+                      mission_time_seconds: totalSeconds,
+                      player_health_final: player.health,
+                      boss_health_final: 0,
+                      projectiles_dodged: state.projectilesDodged,
+                      hits_landed: state.hitsLanded,
+                      accuracy_percent: Math.min(100, Math.max(50, accuracy)),
+                    },
+                    state.puzzles.filter(p => p.solved).length
+                  );
+                }, 1600);
+              } else if (!allEnemiesDefeated) {
+                // Boss is down but remaining pursuit enemies must still be neutralized!
+                const remainingCount = state.enemies.filter(e => e.isAlive).length;
+                setRewardNotice(`⚠️ Final Boss lumpuh! Kalahkan ${remainingCount} musuh pengejar yang tersisa untuk menang!`);
               }
-
-              setTimeout(() => {
-                const totalSeconds = Math.round((Date.now() - state.startTime) / 1000);
-                const accuracy = state.projectilesFired > 0 
-                  ? Math.round((state.hitsLanded / state.projectilesFired) * 100) 
-                  : 88;
-
-                onMissionComplete(
-                  {
-                    mission_time_seconds: totalSeconds,
-                    player_health_final: player.health,
-                    boss_health_final: 0,
-                    projectiles_dodged: state.projectilesDodged,
-                    hits_landed: state.hitsLanded,
-                    accuracy_percent: Math.min(100, Math.max(50, accuracy)),
-                  },
-                  state.puzzles.filter(p => p.solved).length
-                );
-              }, 1600);
             }
             continue;
           }
@@ -1316,6 +1397,16 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
               state.hitsLanded += 1;
               hitEnemy = true;
 
+              // Spawn hitting object impact graphic
+              state.hitEffects.push({
+                x: proj.x,
+                y: proj.y,
+                life: 0,
+                maxLife: 14,
+                size: 38,
+                angle: Math.random() * Math.PI * 2,
+              });
+
               for (let k = 0; k < 6; k++) {
                 state.particles.push({
                   x: proj.x,
@@ -1332,6 +1423,9 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
               if (enemy.hp <= 0) {
                 enemy.isAlive = false;
                 audio.playBossHit();
+                // Bonus +6 peluru saat berhasil mengalahkan musuh agar cukup melawan Boss 5x HP
+                state.ammo = Math.min(weaponLoadout.maxAmmo + 180, state.ammo + 6);
+                setAmmo(state.ammo);
                 for (let k = 0; k < 20; k++) {
                   state.particles.push({
                     x: enemy.x + enemy.width / 2,
@@ -1343,6 +1437,32 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
                     color: enemy.color,
                     size: 4,
                   });
+                }
+
+                // If boss is already defeated and this was the last enemy, trigger victory!
+                const allEnemiesNowDefeated = state.enemies.every(e => !e.isAlive);
+                if (allEnemiesNowDefeated && boss.hp <= 0 && !state.isVictory) {
+                  state.isVictory = true;
+                  audio.playBossDefeat();
+
+                  setTimeout(() => {
+                    const totalSeconds = Math.round((Date.now() - state.startTime) / 1000);
+                    const accuracy = state.projectilesFired > 0 
+                      ? Math.round((state.hitsLanded / state.projectilesFired) * 100) 
+                      : 88;
+
+                    onMissionComplete(
+                      {
+                        mission_time_seconds: totalSeconds,
+                        player_health_final: player.health,
+                        boss_health_final: 0,
+                        projectiles_dodged: state.projectilesDodged,
+                        hits_landed: state.hitsLanded,
+                        accuracy_percent: Math.min(100, Math.max(50, accuracy)),
+                      },
+                      state.puzzles.filter(p => p.solved).length
+                    );
+                  }, 1600);
                 }
               }
               break;
@@ -1399,6 +1519,15 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
         }
       }
 
+      // UPDATE HIT EFFECTS (hitting object from sheet)
+      for (let i = state.hitEffects.length - 1; i >= 0; i--) {
+        const hit = state.hitEffects[i];
+        hit.life += 1;
+        if (hit.life >= hit.maxLife) {
+          state.hitEffects.splice(i, 1);
+        }
+      }
+
       if (player.invulnerableFrames > 0) {
         player.invulnerableFrames -= 1;
       }
@@ -1428,13 +1557,37 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
         ctx.stroke();
       }
 
-      // Render Platforms
+      const sprites = getGameSprites();
+
+      // Render Platforms (Ground with 'land' sprite texture from sheet)
       platforms.forEach(plat => {
         if (plat.type === 'ground') {
-          ctx.fillStyle = '#1e293b';
-          ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
-          ctx.fillStyle = '#10b981';
-          ctx.fillRect(plat.x, plat.y, plat.width, 4);
+          if (sprites.land && sprites.land.complete && sprites.land.naturalWidth > 0) {
+            const tileW = 110;
+            for (let lx = plat.x; lx < plat.x + plat.width; lx += tileW) {
+              const curW = Math.min(tileW, plat.x + plat.width - lx);
+              const srcW = (curW / tileW) * sprites.land.naturalWidth;
+              ctx.drawImage(
+                sprites.land,
+                0,
+                0,
+                srcW,
+                sprites.land.naturalHeight,
+                lx,
+                plat.y,
+                curW,
+                plat.height
+              );
+            }
+            // Crisp top cyber trim for collision precision
+            ctx.fillStyle = '#10b981';
+            ctx.fillRect(plat.x, plat.y, plat.width, 3);
+          } else {
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+            ctx.fillStyle = '#10b981';
+            ctx.fillRect(plat.x, plat.y, plat.width, 4);
+          }
         } else if (plat.type === 'bridge') {
           if (state.bridgeRaised) {
             ctx.fillStyle = '#0284c7';
@@ -1454,21 +1607,21 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             ctx.fillText('⚠️ Jurang Data Rusak (Selesaikan Teka-teki 2)', plat.x + 12, plat.y + 14);
           }
         } else if (plat.type === 'moving') {
-          ctx.fillStyle = '#475569';
+          ctx.fillStyle = '#1e293b';
           ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
-          ctx.fillStyle = '#38bdf8';
+          ctx.fillStyle = '#06b6d4';
           ctx.fillRect(plat.x, plat.y, plat.width, 3);
           ctx.fillStyle = '#e2e8f0';
-          ctx.font = '9px sans-serif';
-          ctx.fillText('↕ Verifikasi Bergerak', plat.x + 4, plat.y + 11);
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillText('↕ Platform Bergerak', plat.x + 6, plat.y + 12);
         } else {
           // Floating platform
-          ctx.fillStyle = '#334155';
+          ctx.fillStyle = '#1e293b';
           ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
-          ctx.fillStyle = '#22c55e';
+          ctx.fillStyle = '#10b981';
           ctx.fillRect(plat.x, plat.y, plat.width, 3);
           if (plat.label) {
-            ctx.fillStyle = '#cbd5e1';
+            ctx.fillStyle = '#6ee7b7';
             ctx.font = 'bold 9px sans-serif';
             ctx.fillText(plat.label, plat.x + 6, plat.y + 12);
           }
@@ -1532,102 +1685,282 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
         ctx.fillText(hz.label, hz.x - 8, hz.y - 4);
       });
 
-      // Render 10 Patrol Minions
+      // Render 10 Patrol Minions (enemy left & enemy right sprites from sheet)
       state.enemies.forEach(enemy => {
         if (!enemy.isAlive) return;
 
-        // Enemy body
-        ctx.fillStyle = enemy.color;
-        ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        const enemySprite = enemy.facing === 'left' ? sprites.enemy_left : sprites.enemy_right;
+        const eDrawW = 38;
+        const eDrawH = 44;
+        const eDrawX = enemy.x - 3;
+        const eDrawY = enemy.y - 6;
 
-        // Eyes / Visor
-        ctx.fillStyle = '#ffffff';
-        const eyeX = enemy.facing === 'right' ? enemy.x + 20 : enemy.x + 4;
-        ctx.fillRect(eyeX, enemy.y + 6, 7, 5);
-
-        // Emoji label inside
-        ctx.font = '16px sans-serif';
-        ctx.fillText(enemy.emoji, enemy.x + 4, enemy.y + 24);
+        if (enemySprite && enemySprite.complete && enemySprite.naturalWidth > 0) {
+          ctx.drawImage(enemySprite, eDrawX, eDrawY, eDrawW, eDrawH);
+        } else {
+          // Fallback enemy body
+          ctx.fillStyle = enemy.color;
+          ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+          ctx.font = '16px sans-serif';
+          ctx.fillText(enemy.emoji, enemy.x + 4, enemy.y + 24);
+        }
 
         // HP bar above minion
-        const hpBarW = 32;
-        ctx.fillStyle = '#334155';
-        ctx.fillRect(enemy.x, enemy.y - 10, hpBarW, 4);
+        const hpBarW = 34;
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(enemy.x - 1, enemy.y - 12, hpBarW, 4);
         ctx.fillStyle = enemy.color;
-        ctx.fillRect(enemy.x, enemy.y - 10, hpBarW * (enemy.hp / enemy.maxHp), 4);
+        ctx.fillRect(enemy.x - 1, enemy.y - 12, hpBarW * (enemy.hp / enemy.maxHp), 4);
 
         ctx.fillStyle = '#cbd5e1';
         ctx.font = 'bold 8px sans-serif';
-        ctx.fillText(enemy.name, enemy.x - 10, enemy.y - 14);
+        ctx.fillText(enemy.name, enemy.x - 8, enemy.y - 16);
+
+        // Chasing indicator if skipped
+        if (enemy.isChasing) {
+          ctx.fillStyle = '#ef4444';
+          ctx.font = 'bold 8px monospace';
+          ctx.fillText('⚠️ MENGEJAR!', enemy.x - 8, enemy.y - 26);
+        }
       });
 
-      // Render Player Character
-      if (player.invulnerableFrames % 6 < 3) {
-        ctx.fillStyle = equippedUpgrade 
-          ? equippedUpgrade.bulletColor 
-          : weaponLoadout.tier === 'master' ? '#38bdf8' : weaponLoadout.tier === 'enhanced' ? '#34d399' : '#10b981';
-        ctx.fillRect(player.x, player.y, player.width, player.height);
+      // Render Gerbang Integritas (Cyber Gate at x = 5950)
+      if (5950 > state.cameraX - 120 && 5950 < state.cameraX + canvas.width + 120) {
+        const aliveMinionsCount = state.enemies.slice(0, 8).filter(e => e.isAlive).length;
+        if (aliveMinionsCount > 0) {
+          // Locked Barrier Forcefield
+          ctx.save();
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+          ctx.fillRect(5940, 120, 20, 300);
 
-        ctx.fillStyle = '#ffffff';
-        const eyeOffset = player.facing === 'right' ? 18 : 4;
-        ctx.fillRect(player.x + eyeOffset, player.y + 8, 7, 5);
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 4;
+          ctx.shadowColor = '#ef4444';
+          ctx.shadowBlur = 12;
+          ctx.beginPath();
+          ctx.moveTo(5950, 120);
+          ctx.lineTo(5950, 420);
+          ctx.stroke();
 
-        ctx.fillStyle = '#065f46';
-        const capeOffset = player.facing === 'right' ? 2 : player.width - 6;
-        ctx.fillRect(player.x + capeOffset, player.y + 12, 4, 22);
-
-        // Weapon graphic
-        ctx.fillStyle = equippedUpgrade ? equippedUpgrade.bulletColor : '#38bdf8';
-        const weaponX = player.facing === 'right' ? player.x + player.width : player.x - 8;
-        ctx.fillRect(weaponX, player.y + 18, 8, 5);
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = '#fee2e2';
+          ctx.font = 'bold 9px monospace';
+          ctx.fillText(`🔒 GERBANG TERKUNCI!`, 5865, 230);
+          ctx.fillStyle = '#fca5a5';
+          ctx.font = 'bold 8px sans-serif';
+          ctx.fillText(`Kalahkan ${aliveMinionsCount} lawan di jalan dahulu!`, 5835, 245);
+          ctx.restore();
+        } else {
+          // Open Gate
+          ctx.save();
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 3;
+          ctx.setLineDash([8, 6]);
+          ctx.beginPath();
+          ctx.moveTo(5950, 120);
+          ctx.lineTo(5950, 420);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#6ee7b7';
+          ctx.font = 'bold 9px monospace';
+          ctx.fillText('🔓 GERBANG TERBUKA! HADAPI FINAL BOSS!', 5835, 240);
+          ctx.restore();
+        }
       }
 
-      // Render Boss Mega Mecha (Sector 5)
-      if (boss.hp > 0 && boss.x > state.cameraX - 150 && boss.x < state.cameraX + canvas.width + 150) {
-        // Boss Outer Aura
+      // Render Final Boss (Sector 5 - final boss sprite from sheet)
+      if (boss.hp > 0 && boss.x > state.cameraX - 180 && boss.x < state.cameraX + canvas.width + 180) {
         const bossAuraColor = boss.phase === 3 ? '#ec4899' : boss.phase === 2 ? '#a855f7' : mission.boss.color;
-        ctx.strokeStyle = bossAuraColor;
-        ctx.lineWidth = boss.phase === 3 ? 3 : 2;
-        ctx.strokeRect(boss.x - 4, boss.y - 4, boss.width + 8, boss.height + 8);
 
-        // Boss Body
-        ctx.fillStyle = mission.boss.color;
-        ctx.fillRect(boss.x, boss.y, boss.width, boss.height);
+        if (sprites.final_boss && sprites.final_boss.complete && sprites.final_boss.naturalWidth > 0) {
+          ctx.save();
+          ctx.shadowColor = bossAuraColor;
+          ctx.shadowBlur = boss.phase === 3 ? 20 : 12;
+          ctx.drawImage(sprites.final_boss, boss.x, boss.y, boss.width, boss.height);
+          ctx.restore();
+        } else {
+          // Fallback Boss outer aura & body
+          ctx.strokeStyle = bossAuraColor;
+          ctx.lineWidth = boss.phase === 3 ? 3 : 2;
+          ctx.strokeRect(boss.x - 4, boss.y - 4, boss.width + 8, boss.height + 8);
 
-        // Boss Core Eye / Visor
-        ctx.fillStyle = boss.phase === 3 ? '#ef4444' : '#fbbf24';
-        const bossFacingLeft = player.x < boss.x;
-        const eyeOffset = bossFacingLeft ? 8 : boss.width - 24;
-        ctx.fillRect(boss.x + eyeOffset, boss.y + 14, 16, 12);
+          ctx.fillStyle = mission.boss.color;
+          ctx.fillRect(boss.x, boss.y, boss.width, boss.height);
+
+          ctx.fillStyle = boss.phase === 3 ? '#ef4444' : '#fbbf24';
+          const bossFacingLeft = player.x < boss.x;
+          const eyeOffset = bossFacingLeft ? 8 : boss.width - 24;
+          ctx.fillRect(boss.x + eyeOffset, boss.y + 14, 16, 12);
+        }
 
         // Boss Name & Phase Badge
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 11px sans-serif';
-        ctx.fillText(`👾 ${mission.boss.name}`, boss.x - 10, boss.y - 18);
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(`👾 ${mission.boss.name}`, boss.x - 10, boss.y - 20);
 
         ctx.font = 'bold 9px monospace';
         ctx.fillStyle = boss.phase === 3 ? '#f43f5e' : boss.phase === 2 ? '#c084fc' : '#38bdf8';
-        ctx.fillText(`Fase ${boss.phase}: ${boss.phase === 3 ? 'OVERDRIVE 360°' : boss.phase === 2 ? 'SEBARAN TRI-CONE' : 'TARGETED AIM'}`, boss.x - 10, boss.y - 6);
+        ctx.fillText(
+          `Fase ${boss.phase}: ${boss.phase === 3 ? 'OVERDRIVE 360°' : boss.phase === 2 ? 'SEBARAN TRI-CONE' : 'TARGETED AIM'}`,
+          boss.x - 10,
+          boss.y - 8
+        );
 
         // Boss HP Bar
-        const barWidth = 120;
+        const barWidth = 140;
         ctx.fillStyle = '#0f172a';
-        ctx.fillRect(boss.x - 20, boss.y + boss.height + 8, barWidth, 7);
+        ctx.fillRect(boss.x - (barWidth - boss.width) / 2, boss.y + boss.height + 8, barWidth, 8);
         ctx.fillStyle = bossAuraColor;
-        ctx.fillRect(boss.x - 20, boss.y + boss.height + 8, barWidth * (boss.hp / boss.maxHp), 7);
+        ctx.fillRect(
+          boss.x - (barWidth - boss.width) / 2,
+          boss.y + boss.height + 8,
+          barWidth * (boss.hp / boss.maxHp),
+          8
+        );
       }
 
-      // Render Projectiles
-      state.projectiles.forEach(proj => {
-        ctx.fillStyle = proj.color;
-        ctx.beginPath();
-        ctx.arc(proj.x, proj.y, proj.radius, 0, Math.PI * 2);
-        ctx.fill();
+      // Render Player Character (mc right, mc left, jump, jump twice from sheet)
+      if (player.invulnerableFrames <= 0 || Math.floor(player.invulnerableFrames / 4) % 2 === 0) {
+        let playerSprite: HTMLImageElement | null = null;
+        let flipHorizontal = false;
 
-        if (proj.text) {
+        if (!player.isGrounded) {
+          // In air jumping states:
+          // jump twice: main character double jump
+          // jump: main character single jump
+          if (player.jumpCount >= 2) {
+            playerSprite = sprites.jump_twice;
+          } else {
+            playerSprite = sprites.jump;
+          }
+          // Follow player horizontal facing
+          if (player.facing === 'left') {
+            flipHorizontal = true;
+          }
+        } else {
+          // On ground:
+          // mc right: main character facing right and moving right
+          // mc left: main character facing left and moving left
+          if (player.facing === 'left') {
+            playerSprite = sprites.mc_left;
+          } else {
+            playerSprite = sprites.mc_right;
+          }
+        }
+
+        const pDrawW = 34;
+        const pDrawH = 46;
+        const pDrawX = player.x - 2;
+        const pDrawY = player.y - 2;
+
+        if (playerSprite && playerSprite.complete && playerSprite.naturalWidth > 0) {
+          ctx.save();
+          if (flipHorizontal) {
+            ctx.translate(pDrawX + pDrawW, pDrawY);
+            ctx.scale(-1, 1);
+            ctx.drawImage(playerSprite, 0, 0, pDrawW, pDrawH);
+          } else {
+            ctx.drawImage(playerSprite, pDrawX, pDrawY, pDrawW, pDrawH);
+          }
+          ctx.restore();
+
+          // Weapon upgrade indicator ring if active (combined)
+          if (equippedUpgrades.length > 0) {
+            ctx.save();
+            const topUpgrade = equippedUpgrades[equippedUpgrades.length - 1];
+            ctx.strokeStyle = topUpgrade.bulletColor;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(pDrawX - 3, pDrawY - 3, pDrawW + 6, pDrawH + 6);
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
+        } else {
+          // Fallback vector drawing
+          const topUpgrade = equippedUpgrades[equippedUpgrades.length - 1];
+          ctx.fillStyle = topUpgrade
+            ? topUpgrade.bulletColor
+            : weaponLoadout.tier === 'master'
+            ? '#38bdf8'
+            : weaponLoadout.tier === 'enhanced'
+            ? '#34d399'
+            : '#10b981';
+          ctx.fillRect(player.x, player.y, player.width, player.height);
+
           ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 7px monospace';
-          ctx.fillText(proj.text, proj.x - 10, proj.y - 8);
+          const eyeOffset = player.facing === 'right' ? 18 : 4;
+          ctx.fillRect(player.x + eyeOffset, player.y + 8, 7, 5);
+
+          ctx.fillStyle = '#065f46';
+          const capeOffset = player.facing === 'right' ? 2 : player.width - 6;
+          ctx.fillRect(player.x + capeOffset, player.y + 12, 4, 22);
+        }
+      }
+
+      // Render Projectiles (bullet & enemy blast sprites from sheet)
+      state.projectiles.forEach(proj => {
+        if (proj.isPlayer) {
+          // MC bullet sprite
+          if (sprites.bullet && sprites.bullet.complete && sprites.bullet.naturalWidth > 0) {
+            ctx.save();
+            ctx.translate(proj.x, proj.y);
+            const angle = Math.atan2(proj.vy, proj.vx);
+            ctx.rotate(angle);
+            const bw = 24;
+            const bh = 11;
+            ctx.drawImage(sprites.bullet, -bw / 2, -bh / 2, bw, bh);
+            ctx.restore();
+          } else {
+            ctx.fillStyle = proj.color;
+            ctx.beginPath();
+            ctx.arc(proj.x, proj.y, proj.radius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (proj.text) {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 7px monospace';
+            ctx.fillText(proj.text, proj.x - 10, proj.y - 8);
+          }
+        } else {
+          // Enemy and boss projectile: enemy blast sprite
+          if (sprites.enemy_blast && sprites.enemy_blast.complete && sprites.enemy_blast.naturalWidth > 0) {
+            ctx.save();
+            ctx.translate(proj.x, proj.y);
+            const angle = Math.atan2(proj.vy, proj.vx);
+            ctx.rotate(angle);
+            const isBossProj = proj.radius > 6;
+            const ew = isBossProj ? 38 : 28;
+            const eh = (ew * 213) / 635;
+            ctx.drawImage(sprites.enemy_blast, -ew / 2, -eh / 2, ew, eh);
+            ctx.restore();
+          } else {
+            ctx.fillStyle = proj.color;
+            ctx.beginPath();
+            ctx.arc(proj.x, proj.y, proj.radius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (proj.text) {
+            ctx.fillStyle = '#fecdd3';
+            ctx.font = 'bold 7px monospace';
+            ctx.fillText(proj.text, proj.x - 10, proj.y - 8);
+          }
+        }
+      });
+
+      // Render Hit Effects (hitting object sprite when bullet impacts enemy)
+      state.hitEffects.forEach(hit => {
+        if (sprites.hitting_object && sprites.hitting_object.complete && sprites.hitting_object.naturalWidth > 0) {
+          ctx.save();
+          ctx.translate(hit.x, hit.y);
+          ctx.rotate(hit.angle);
+          const progress = hit.life / hit.maxLife;
+          const scale = 0.8 + progress * 0.45;
+          ctx.globalAlpha = Math.max(0, 1 - progress);
+          const s = hit.size * scale;
+          ctx.drawImage(sprites.hitting_object, -s / 2, -s / 2, s, s);
+          ctx.restore();
         }
       });
 
@@ -1643,6 +1976,181 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
 
       ctx.restore();
 
+      // =============================================================
+      // IN-GAME SCREEN HUD (Drawn directly on canvas, static to screen)
+      // Bar Nyawa (Health Bar), Jumlah Peluru (Ammo Gauge), Weapon & Boss HP
+      // =============================================================
+      ctx.save();
+      const hudX = 14;
+      const hudY = 12;
+
+      // 1. TOP-LEFT: BAR NYAWA & JUMLAH PELURU CARD
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+      ctx.strokeStyle = 'rgba(51, 65, 85, 0.95)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(hudX - 4, hudY - 4, 230, 84, 10);
+      ctx.fill();
+      ctx.stroke();
+
+      // Label & Bar: BAR NYAWA
+      ctx.fillStyle = '#f43f5e';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('❤️ BAR NYAWA', hudX + 2, hudY + 12);
+
+      const hpBarW = 126;
+      const hpBarH = 12;
+      const hpBarX = hudX + 90;
+      const hpBarY = hudY + 2;
+
+      // Bar Nyawa background
+      ctx.fillStyle = '#090d16';
+      ctx.beginPath();
+      ctx.roundRect(hpBarX, hpBarY, hpBarW, hpBarH, 4);
+      ctx.fill();
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Bar Nyawa fill
+      const hpRatio = Math.max(0, Math.min(1, player.health / player.maxHealth));
+      if (hpRatio > 0) {
+        const hpFillW = Math.max(4, hpBarW * hpRatio);
+        ctx.fillStyle = hpRatio > 0.5 ? '#10b981' : hpRatio > 0.25 ? '#f59e0b' : '#ef4444';
+        ctx.beginPath();
+        ctx.roundRect(hpBarX, hpBarY, hpFillW, hpBarH, 4);
+        ctx.fill();
+      }
+
+      // Bar Nyawa text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(`${player.health} / ${player.maxHealth} HP`, hpBarX + hpBarW / 2 - 24, hpBarY + 9);
+
+      // Label & Bar: JUMLAH PELURU
+      const ammoY = hudY + 22;
+      const isAmmoLow = state.ammo <= 5;
+      ctx.fillStyle = isAmmoLow ? '#f43f5e' : '#fbbf24';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('⚡ PELURU', hudX + 2, ammoY + 12);
+
+      const ammoBarW = 126;
+      const ammoBarH = 12;
+      const ammoBarX = hudX + 90;
+      const ammoBarY = ammoY + 2;
+
+      // Peluru background
+      ctx.fillStyle = '#090d16';
+      ctx.beginPath();
+      ctx.roundRect(ammoBarX, ammoBarY, ammoBarW, ammoBarH, 4);
+      ctx.fill();
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Peluru fill
+      const ammoRatio = Math.max(0, Math.min(1, state.ammo / weaponLoadout.maxAmmo));
+      if (ammoRatio > 0) {
+        const ammoFillW = Math.max(4, ammoBarW * ammoRatio);
+        ctx.fillStyle = isAmmoLow ? '#f43f5e' : state.ammo <= 12 ? '#f59e0b' : '#38bdf8';
+        ctx.beginPath();
+        ctx.roundRect(ammoBarX, ammoBarY, ammoFillW, ammoBarH, 4);
+        ctx.fill();
+      }
+
+      // Peluru text
+      ctx.fillStyle = isAmmoLow ? '#fecdd3' : '#ffffff';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(`${state.ammo} / ${weaponLoadout.maxAmmo}${isAmmoLow ? ' [KRITIS!]' : ''}`, ammoBarX + 8, ammoBarY + 9);
+
+      // Weapon Upgrade indicator badge (Kombinasi fitur)
+      const wpnY = hudY + 44;
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '9px sans-serif';
+      ctx.fillText('🔫 SENJATA:', hudX + 2, wpnY + 9);
+      ctx.fillStyle = equippedUpgrades.length > 0 ? '#67e8f9' : '#34d399';
+      ctx.font = 'bold 9px sans-serif';
+      const wpnLabel = equippedUpgrades.length > 0
+        ? `KOMBO: ${equippedUpgrades.map(u => u.badge).join(' + ')}`
+        : weaponLoadout.name;
+      ctx.fillText(wpnLabel.length > 24 ? wpnLabel.substring(0, 23) + '…' : wpnLabel, hudX + 68, wpnY + 9);
+
+      // Defeated Enemies counter row (Semua lawan harus dikalahkan)
+      const emyY = hudY + 60;
+      const totalEnemies = state.enemies.length;
+      const defeatedEnemies = state.enemies.filter(e => !e.isAlive).length;
+      const allDefeated = defeatedEnemies === totalEnemies;
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '9px sans-serif';
+      ctx.fillText('👾 LAWAN:', hudX + 2, emyY + 9);
+      ctx.fillStyle = allDefeated ? '#34d399' : '#fb923c';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(`${defeatedEnemies}/${totalEnemies} KALAH ${allDefeated ? '✓ (BERSIH)' : '(WAJIB SEMUA)'}`, hudX + 68, emyY + 9);
+
+      // 2. TOP-CENTER: EPIC FINAL BOSS HEALTH BAR (When in Sector 5 or boss is engaged)
+      const isBossEncounter = player.x > 5600 || boss.hp < calculatedBossMaxHp;
+      if (isBossEncounter && boss.hp > 0) {
+        const bossBarW = 320;
+        const bossBarH = 14;
+        const bossBarX = (canvas.width - bossBarW) / 2;
+        const bossBarY = 12;
+
+        ctx.fillStyle = 'rgba(24, 10, 24, 0.92)';
+        ctx.strokeStyle = boss.phase === 3 ? '#f43f5e' : '#c084fc';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(bossBarX - 8, bossBarY - 4, bossBarW + 16, 42, 10);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#fbcfe8';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText(`👾 FINAL BOSS: ${mission.boss.name}`, bossBarX, bossBarY + 10);
+
+        ctx.font = 'bold 9px monospace';
+        ctx.fillStyle = boss.phase === 3 ? '#fda4af' : '#e9d5ff';
+        const phaseName = boss.phase === 3 ? 'OVERDRIVE 360°' : boss.phase === 2 ? 'TRI-SPREAD CONE' : 'TARGETED AIM';
+        ctx.fillText(`FASE ${boss.phase} (${phaseName})`, bossBarX + bossBarW - 130, bossBarY + 10);
+
+        // Long Boss HP Bar
+        ctx.fillStyle = '#1e1b4b';
+        ctx.beginPath();
+        ctx.roundRect(bossBarX, bossBarY + 16, bossBarW, bossBarH, 4);
+        ctx.fill();
+        ctx.strokeStyle = '#6b21a8';
+        ctx.stroke();
+
+        const bRatio = Math.max(0, Math.min(1, boss.hp / calculatedBossMaxHp));
+        if (bRatio > 0) {
+          ctx.fillStyle = boss.phase === 3 ? '#ef4444' : boss.phase === 2 ? '#ec4899' : '#f43f5e';
+          ctx.beginPath();
+          ctx.roundRect(bossBarX, bossBarY + 16, Math.max(4, bossBarW * bRatio), bossBarH, 4);
+          ctx.fill();
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(`${boss.hp} / ${calculatedBossMaxHp} HP`, bossBarX + bossBarW / 2 - 42, bossBarY + 27);
+      }
+
+      // 3. TOP-RIGHT: MINI PROGRESS
+      const rightX = canvas.width - 145;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.strokeStyle = 'rgba(51, 65, 85, 0.9)';
+      ctx.beginPath();
+      ctx.roundRect(rightX, hudY - 4, 134, 40, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.fillText(`🚩 Sektor ${currentSector}/5 (${Math.round((player.x / 7200) * 100)}%)`, rightX + 6, hudY + 11);
+
+      ctx.fillStyle = '#34d399';
+      ctx.fillText(`🧩 Teka-teki: ${state.puzzles.filter(p => p.solved).length}/${mission.inGamePuzzles.length}`, rightX + 6, hudY + 27);
+
+      ctx.restore();
+
       animId = requestAnimationFrame(loop);
     };
 
@@ -1651,7 +2159,7 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [weaponLoadout, mission, gameSpeed, solvedPuzzleIds]);
+  }, [weaponLoadout, mission, gameSpeed, solvedPuzzleIds, calculatedBossMaxHp]);
 
   // Sector calculation for HUD (7200px total length)
   const currentSector = Math.min(5, Math.max(1, Math.floor((gameStateRef.current.player.x / 1440) + 1)));
@@ -1699,8 +2207,10 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             </div>
             <div className="text-[10px] text-slate-400 flex items-center gap-1">
               <span>Senjata:</span>
-              <strong className={equippedUpgrade ? 'text-amber-300 flex items-center gap-0.5' : 'text-teal-400'}>
-                {equippedUpgrade ? `${equippedUpgrade.icon} ${equippedUpgrade.name}` : weaponLoadout.name}
+              <strong className={equippedUpgrades.length > 0 ? 'text-amber-300 flex items-center gap-0.5' : 'text-teal-400'}>
+                {equippedUpgrades.length > 0
+                  ? `🔥 [${equippedUpgrades.map(u => u.badge).join(' + ')}]`
+                  : weaponLoadout.name}
               </strong>
             </div>
           </div>
@@ -1717,31 +2227,53 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
           </span>
         </div>
 
-        {/* Ammo & Health Gauges */}
-        <div className="flex items-center gap-2.5 sm:gap-4">
+        {/* Ammo, Enemies & Health Gauges with bold labels */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* ENEMY DEFEATED COUNTER (Semua lawan wajib dikalahkan) */}
+          <div className="flex items-center gap-1.5 bg-slate-950/90 px-2.5 py-1 rounded-xl border border-purple-500/30 shadow-md">
+            <span className="text-sm">👾</span>
+            <div className="text-left">
+              <div className="text-[9px] text-purple-300/80 uppercase font-bold tracking-wider">Lawan Kalah</div>
+              <div className="text-xs font-black font-mono text-purple-300">
+                {gameStateRef.current.enemies.filter(e => !e.isAlive).length} / {gameStateRef.current.enemies.length}
+              </div>
+            </div>
+          </div>
+
           {/* AMMO COUNTER GAUGE */}
-          <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-xl border border-slate-800">
-            <Zap className={`w-4 h-4 ${ammo <= 5 ? 'text-rose-400 animate-pulse' : 'text-amber-400'}`} />
-            <div className="text-right">
-              <div className="text-[9px] text-slate-400 uppercase font-bold">Peluru</div>
-              <div className={`text-xs font-black ${ammo <= 5 ? 'text-rose-400' : ammo <= 12 ? 'text-amber-400' : 'text-emerald-400'}`}>
+          <div className="flex items-center gap-1.5 bg-slate-950/90 px-2.5 py-1 rounded-xl border border-amber-500/30 shadow-md">
+            <Zap className={`w-4 h-4 ${ammo <= 5 ? 'text-rose-400 animate-pulse fill-rose-400' : 'text-amber-400 fill-amber-400'}`} />
+            <div className="text-left">
+              <div className="text-[9px] text-amber-300/80 uppercase font-bold tracking-wider">Jumlah Peluru</div>
+              <div className={`text-xs font-black font-mono ${ammo <= 5 ? 'text-rose-400 animate-pulse' : ammo <= 12 ? 'text-amber-400' : 'text-emerald-400'}`}>
                 {ammo} / {weaponLoadout.maxAmmo}
               </div>
             </div>
           </div>
 
           {/* Player HP */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2 bg-slate-950/90 px-2.5 py-1 rounded-xl border border-rose-500/30 shadow-md">
             <Heart className="w-4 h-4 text-rose-500 fill-rose-500 shrink-0" />
-            <div className="w-16 sm:w-24 bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700">
-              <div
-                className="bg-gradient-to-r from-rose-500 to-emerald-400 h-full transition-all duration-200"
-                style={{ width: `${Math.max(0, (playerHp / initialMaxHp) * 100)}%` }}
-              />
+            <div>
+              <div className="text-[9px] text-rose-300/80 uppercase font-bold tracking-wider">Bar Nyawa</div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-14 sm:w-20 bg-slate-800 rounded-full h-2.5 overflow-hidden border border-slate-700">
+                  <div
+                    className={`h-full transition-all duration-200 ${
+                      playerHp > initialMaxHp * 0.5
+                        ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                        : playerHp > initialMaxHp * 0.25
+                        ? 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                        : 'bg-gradient-to-r from-rose-600 to-red-500 animate-pulse'
+                    }`}
+                    style={{ width: `${Math.max(0, (playerHp / initialMaxHp) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-xs font-black text-slate-100 font-mono">
+                  {playerHp}
+                </span>
+              </div>
             </div>
-            <span className="text-xs font-bold text-slate-200">
-              {playerHp}
-            </span>
           </div>
 
           {/* Sound toggle */}
@@ -1772,20 +2304,94 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             className="w-full h-full object-contain block"
           />
 
-          {/* Mini In-Game Objectives Ribbon */}
-          <div className="absolute top-3 left-3 bg-slate-900/90 backdrop-blur border border-slate-700/80 px-3 py-1.5 rounded-xl text-xs flex items-center gap-3">
-            <span className="text-slate-400">Teka-teki:</span>
-            <span className="font-bold text-emerald-400">
-              {solvedPuzzleIds.length} / {mission.inGamePuzzles.length} Selesai
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-amber-300 font-semibold flex items-center gap-1">
-              👾 Boss: {mission.boss.name} ({bossHp} HP)
-            </span>
-            <span className="hidden sm:inline text-slate-600">|</span>
-            <span className="hidden sm:inline text-cyan-400 font-mono text-[11px]">
-              Panjang Stage 3x (7200m)
-            </span>
+          {/* High-Visibility In-Game HUD Overlay right on top of canvas */}
+          <div className="absolute top-2.5 left-2.5 right-2.5 pointer-events-none flex flex-wrap items-start justify-between gap-2 z-20">
+            {/* Left: Bar Nyawa & Jumlah Peluru Card */}
+            <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-2 sm:p-2.5 shadow-xl flex flex-col gap-1.5 min-w-[200px] sm:min-w-[230px]">
+              {/* Bar Nyawa */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-black text-rose-400">
+                  <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500 shrink-0" />
+                  <span>BAR NYAWA:</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-20 sm:w-28 bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-700">
+                    <div
+                      className={`h-full transition-all duration-200 ${
+                        playerHp > initialMaxHp * 0.5
+                          ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                          : playerHp > initialMaxHp * 0.25
+                          ? 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                          : 'bg-gradient-to-r from-rose-600 to-red-500 animate-pulse'
+                      }`}
+                      style={{ width: `${Math.max(0, (playerHp / initialMaxHp) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] font-black text-white font-mono min-w-[46px] text-right">
+                    {playerHp}/{initialMaxHp}
+                  </span>
+                </div>
+              </div>
+
+              {/* Jumlah Peluru */}
+              <div className="flex items-center justify-between gap-2 border-t border-slate-800/80 pt-1">
+                <div className="flex items-center gap-1.5 text-[11px] font-black text-amber-400">
+                  <Zap className={`w-3.5 h-3.5 ${ammo <= 5 ? 'text-rose-400 animate-pulse fill-rose-400' : 'text-amber-400 fill-amber-400'}`} />
+                  <span>JUMLAH PELURU:</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`text-[11px] font-black font-mono px-2 py-0.5 rounded-lg border ${
+                      ammo <= 5
+                        ? 'bg-rose-950/90 text-rose-300 border-rose-500 animate-pulse'
+                        : ammo <= 12
+                        ? 'bg-amber-950/90 text-amber-300 border-amber-500'
+                        : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
+                    }`}
+                  >
+                    {ammo} / {weaponLoadout.maxAmmo}
+                  </span>
+                  {ammo <= 5 && (
+                    <span className="text-[9px] text-rose-400 font-extrabold animate-pulse hidden sm:inline">
+                      KRITIS!
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Center: Boss HP Bar in Sector 5 / Boss encounter */}
+            {(gameStateRef.current.player.x > 5600 || bossHp < calculatedBossMaxHp) && bossHp > 0 && (
+              <div className="bg-slate-950/95 backdrop-blur-md border-2 border-rose-500/80 rounded-2xl px-3 py-1.5 shadow-2xl flex flex-col items-center gap-1 min-w-[210px] sm:min-w-[260px]">
+                <div className="flex items-center justify-between w-full text-[10px] font-black text-rose-300">
+                  <span className="flex items-center gap-1">👾 FINAL BOSS: {mission.boss.name}</span>
+                  <span className="text-amber-400 font-mono">{bossHp} / {calculatedBossMaxHp} HP</span>
+                </div>
+                <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden border border-rose-950">
+                  <div
+                    className="bg-gradient-to-r from-rose-600 via-pink-600 to-purple-600 h-full transition-all duration-150"
+                    style={{ width: `${Math.max(0, (bossHp / calculatedBossMaxHp) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Right: Teka-teki & Sektor status badge */}
+            <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl px-3 py-1.5 shadow-xl flex items-center gap-2.5 text-xs">
+              <div className="text-right">
+                <div className="text-[9px] text-slate-400">Teka-teki</div>
+                <div className="font-black text-emerald-400 text-xs">
+                  {solvedPuzzleIds.length} / {mission.inGamePuzzles.length}
+                </div>
+              </div>
+              <div className="h-6 w-px bg-slate-800" />
+              <div className="text-right">
+                <div className="text-[9px] text-cyan-400">Sektor</div>
+                <div className="font-black text-cyan-300 text-xs">
+                  {currentSector}/5
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1798,7 +2404,7 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
             <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 font-mono border border-slate-700">↑ / SPASI</span>
             <span>Lompat</span>
             <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 font-mono border border-slate-700">J / X</span>
-            <span>Tembak ({equippedUpgrade ? equippedUpgrade.badge : 'Verifikasi'})</span>
+            <span>Tembak ({equippedUpgrades.length > 0 ? equippedUpgrades.map(u => u.badge).join(' + ') : 'Verifikasi'})</span>
             <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 font-mono border border-slate-700">E</span>
             <span>Cek Teka-teki</span>
           </div>
@@ -1861,52 +2467,80 @@ export const SideScrollGame: React.FC<SideScrollGameProps> = ({
                 </div>
                 <div>
                   <h3 className="font-black text-base sm:text-lg text-white">
-                    Teka-teki Berhasil! Pilih Senjata Baru
+                    Teka-teki Berhasil! Kombinasikan Fitur Senjata
                   </h3>
                   <p className="text-xs text-teal-300 font-semibold">
-                    Amunisi bertambah & daya hancur senjata meningkat!
+                    Fitur digabungkan! (Misal: Homing + 3 Missile = 3 peluru pelacak)
                   </p>
                 </div>
               </div>
             </div>
 
+            {/* Currently Active Combinations */}
+            {equippedUpgrades.length > 0 && (
+              <div className="bg-slate-950/80 p-3 rounded-2xl border border-teal-500/30 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-400 font-semibold">Kombinasi Aktif:</span>
+                {equippedUpgrades.map(u => (
+                  <span
+                    key={u.id}
+                    className="px-2.5 py-1 rounded-xl bg-teal-950 border border-teal-400/50 text-teal-300 font-black flex items-center gap-1 text-[11px]"
+                  >
+                    <span>{u.icon}</span>
+                    <span>{u.badge}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+
             <p className="text-xs sm:text-sm text-slate-300">
-              Hebat! Keberhasilan analisis verifikasimu membuka suplai senjata dari Digital Guardian Academy. Pilih salah satu peningkatan senjata di bawah:
+              Pilih salah satu fitur di bawah untuk <strong>digabungkan</strong> ke senjatamu saat ini. Setiap peningkatan akan menambah amunisi & memulihkan HP!
             </p>
 
             {/* Weapon Choices */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              {WEAPON_UPGRADES.map(upgrade => (
-                <button
-                  key={upgrade.id}
-                  onClick={() => handleSelectWeaponUpgrade(upgrade)}
-                  className="p-3.5 rounded-2xl bg-slate-800 hover:bg-slate-750 border-2 border-slate-700 hover:border-teal-400 transition-all text-left flex flex-col justify-between group cursor-pointer shadow-lg hover:shadow-teal-950/50"
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-2xl">{upgrade.icon}</span>
-                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-teal-950 text-teal-300 border border-teal-500/40 uppercase">
-                        {upgrade.badge}
-                      </span>
+              {WEAPON_UPGRADES.map(upgrade => {
+                const isAlreadyOwned = equippedUpgrades.some(u => u.id === upgrade.id);
+                return (
+                  <button
+                    key={upgrade.id}
+                    onClick={() => handleSelectWeaponUpgrade(upgrade)}
+                    className={`p-3.5 rounded-2xl transition-all text-left flex flex-col justify-between group cursor-pointer shadow-lg ${
+                      isAlreadyOwned
+                        ? 'bg-teal-950/40 border-2 border-teal-400/80 hover:border-teal-300'
+                        : 'bg-slate-800 hover:bg-slate-750 border-2 border-slate-700 hover:border-teal-400 hover:shadow-teal-950/50'
+                    }`}
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-2xl">{upgrade.icon}</span>
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-teal-950 text-teal-300 border border-teal-500/40 uppercase">
+                          {upgrade.badge}
+                        </span>
+                      </div>
+                      <div className="font-black text-sm text-white group-hover:text-teal-300 transition flex items-center gap-1.5">
+                        <span>{upgrade.name}</span>
+                        {isAlreadyOwned && <span className="text-emerald-400 text-xs">✓</span>}
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-tight">
+                        {upgrade.description}
+                      </p>
                     </div>
-                    <div className="font-black text-sm text-white group-hover:text-teal-300 transition">
-                      {upgrade.name}
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-tight">
-                      {upgrade.description}
-                    </p>
-                  </div>
 
-                  <div className="pt-3 mt-2 border-t border-slate-700/60 flex items-center justify-between text-[11px] font-bold">
-                    <span className="text-amber-400">⚡ +{upgrade.ammoBonus} Peluru</span>
-                    <span className="text-rose-400">❤️ +{upgrade.hpRestore} HP</span>
-                  </div>
-                </button>
-              ))}
+                    <div className="pt-3 mt-2 border-t border-slate-700/60 flex items-center justify-between text-[11px] font-bold">
+                      <span className="text-amber-400">⚡ +{upgrade.ammoBonus} Peluru</span>
+                      <span className="text-rose-400">❤️ +{upgrade.hpRestore} HP</span>
+                    </div>
+
+                    <div className="mt-2 text-[10px] text-center font-bold py-1 rounded-lg bg-slate-900/90 text-cyan-300">
+                      {isAlreadyOwned ? '✓ SUDAH TERGABUNG (Pilih untuk +Peluru & HP)' : '+ GABUNGKAN FITUR INI'}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="pt-2 text-center text-xs text-slate-400">
-              Klik salah satu senjata di atas untuk langsung menggunakannya di lintasan.
+              Pilihan fitur langsung digabung secara akumulatif ke senjatamu di lintasan.
             </div>
           </div>
         </div>

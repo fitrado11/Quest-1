@@ -99,10 +99,23 @@ export interface LeaderboardEntry {
 }
 
 // QUEST Gate Content Definitions
+export interface VerifiedSource {
+  institution: string;
+  title: string;
+  yearOrDate: string;
+  url?: string;
+  note?: string;
+}
+
 export interface QueryPhaseData {
   npcSpeaker: string;
   scenario: string;
   question: string;
+  learningGoal?: string;
+  scaffolding?: {
+    modelExample?: string;
+    studentHint?: string;
+  };
   options: {
     id: string;
     text: string;
@@ -110,10 +123,12 @@ export interface QueryPhaseData {
     explanation: string;
   }[];
   hint: string;
+  verifiedSource?: VerifiedSource;
 }
 
 export interface UncoverPhaseData {
   prompt: string;
+  learningGoal?: string;
   cards: {
     id: string;
     title: string;
@@ -122,10 +137,12 @@ export interface UncoverPhaseData {
     explanation: string;
   }[];
   hint: string;
+  verifiedSource?: VerifiedSource;
 }
 
 export interface ExaminePhaseData {
   prompt: string;
+  learningGoal?: string;
   sources: {
     id: string;
     title: string;
@@ -134,28 +151,46 @@ export interface ExaminePhaseData {
     description: string;
     isMostReliable: boolean;
     explanation: string;
+    authorOrPublisher?: string;
+    date?: string;
+    evidenceSummary?: string;
+    purpose?: string;
+    corroboration?: string;
+    verifiedSource?: VerifiedSource;
   }[];
   hint: string;
+  verifiedSource?: VerifiedSource;
 }
 
 export interface SafeguardPhaseData {
   prompt: string;
+  learningGoal?: string;
   items: {
     id: string;
+    category?: 'people' | 'data' | 'ideas';
     statement: string;
     shouldBeEnabled: boolean;
     explanation: string;
   }[];
+  verifiedSource?: VerifiedSource;
 }
 
 export interface TransformPhaseData {
   prompt: string;
+  learningGoal?: string;
   actions: {
     id: string;
     label: string;
     isCorrect: boolean;
     explanation: string;
   }[];
+  readCloseThinkPrompts?: {
+    step1Read: string;
+    step2Close: string;
+    step3ThinkQuestions: string[];
+    step4CreateProducts: string[];
+  };
+  verifiedSource?: VerifiedSource;
 }
 
 export interface InGamePuzzle {
